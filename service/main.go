@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"reflect"
 	"github.com/pborman/uuid"
-	"context"
-	"cloud.google.com/go/bigtable"
+	//"context"
+	//"cloud.google.com/go/bigtable"
 )
 
 const (
