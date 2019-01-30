@@ -13,6 +13,9 @@ import (
 	"cloud.google.com/go/bigtable"
 	"cloud.google.com/go/storage"
 	"io"
+	"github.com/auth0/go-jwt-middleware"
+	"github.com/dgrijalva/jwt-go"
+	"github.com/gorilla/mux"
 )
 
 const (
@@ -39,6 +42,8 @@ type Post struct {
 	Location Location `json:"location"`
 	Url string `json:"url"`
 }
+
+var mySigningKey = []byte("secret")
 
 func main() {
 	// setup elastic search
@@ -76,10 +81,24 @@ func main() {
 		}
  	}
 
-	// setup http request handlers
 	fmt.Println("started-service")
-	http.HandleFunc("/post", handlerPost)
-	http.HandleFunc("/search", handlerSearch)
+
+	// initiate gorilla/mux router
+	r := mux.NewRouter()
+	var jwtMiddleware = jwtmiddleware.New(jwtmiddleware.Options{
+		ValidationKeyGetter:func(token *jwt.Token) (interface{}, error) {
+			return mySigningKey, nil
+		},
+		SigningMethod: jwt.SigningMethodHS256,
+	})
+
+	// setup http request handlers
+	r.Handle("/post", jwtMiddleware.Handler(http.HandlerFunc(handlerPost))).Methods("POST")
+	r.Handle("/search", jwtMiddleware.Handler(http.HandlerFunc(handlerSearch))).Methods("GET")
+	r.Handle("/login", http.HandlerFunc(loginHandler)).Methods("POST")
+	r.Handle("/signup", http.HandlerFunc(signupHandler)).Methods("POST")
+
+	http.Handle("/", r)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -87,6 +106,11 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+
+	// get username from token claim
+	user := r.Context().Value("user")
+	claims := user.(*jwt.Token).Claims
+	username := claims.(jwt.MapClaims)["username"]
 
 	// 32 << 20 is the maxMemory param for ParseMultipartForm, equals to 32MB
 	// (1MB = 1024 * 1024 bytes = 2^20 bytes)
@@ -101,7 +125,7 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 	lat,_ := strconv.ParseFloat(r.FormValue("lat"), 64)
 	lon,_ := strconv.ParseFloat(r.FormValue("lon"), 64)
 	p := &Post{
-		User: r.FormValue("user"),
+		User: username.(string),
 		Message: r.FormValue("message"),
 		Location: Location {
 			Lat: lat,
@@ -241,10 +265,12 @@ func handlerSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// set a geo distance query
 	q := elastic.NewGeoDistanceQuery("location")
+	// set parameters of query
 	q = q.Distance(ran).Lat(lat).Lon(lon)
-
-	searchResult, err := client.Search().
+	// search
+	searchResult,err := client.Search().
 		Index(INDEX).
 		Query(q).
 		Pretty(true).
